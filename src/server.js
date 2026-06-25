@@ -263,50 +263,24 @@ async function designWorkflow(body) {
     { status: "done", label: "准备标准节点白名单和 JSON 输出约束" }
   ];
 
-  if (isModelReady(modelConfig)) {
-    try {
-      const modelStartedAt = Date.now();
-      const modelPayload = await withTimeout(
-        runWorkflowDesignerModel(modelConfig, requirement, fallbackDesign),
-        getWorkflowModelTimeoutMs(),
-        `大模型生成超过 ${Math.round(getWorkflowModelTimeoutMs() / 1000)} 秒`
-      );
-      const design = normalizeModelDesign(modelPayload, requirement, fallbackDesign);
-      return {
-        ...design,
-        model_elapsed_ms: Date.now() - modelStartedAt,
-        generation_elapsed_ms: Date.now() - startedAt,
-        generation_trace: [
-          ...baseTrace,
-          { status: "done", label: "已调用配置的大模型生成工作流蓝图" },
-          { status: "done", label: "已解析模型返回 JSON" },
-          { status: "done", label: "已校验 Coze 标准节点、变量、分支、并行和循环关系" }
-        ]
-      };
-    } catch (error) {
-      return {
-        ...fallbackDesign,
-        generation_source: "local_fallback",
-        generation_warning: `大模型生成失败，已回退本地规则：${error.message}`,
-        generation_elapsed_ms: Date.now() - startedAt,
-        generation_trace: [
-          ...baseTrace,
-          { status: "warn", label: `大模型调用失败：${error.message}` },
-          { status: "done", label: "已使用本地规则生成可用兜底蓝图" }
-        ]
-      };
-    }
+  if (!isModelReady(modelConfig)) {
+    throw new Error("未启用或未完整配置大模型，无法生成方案。请先在模型配置页填写 base_url、api_key 和 model。");
   }
 
+  const modelStartedAt = Date.now();
+  const { payload: modelPayload, attempts, trace: retryTrace } = await runWorkflowDesignerModelInStages(modelConfig, requirement, fallbackDesign);
+  const design = normalizeModelDesign(modelPayload, requirement, fallbackDesign);
   return {
-    ...fallbackDesign,
-    generation_source: "local_rules",
-    generation_warning: "未启用或未完整配置大模型，当前使用本地规则生成。",
+    ...design,
+    generation_source: "configured_model",
+    model_attempts: attempts,
+    model_elapsed_ms: Date.now() - modelStartedAt,
     generation_elapsed_ms: Date.now() - startedAt,
     generation_trace: [
       ...baseTrace,
-      { status: "warn", label: "未找到完整模型配置，跳过大模型调用" },
-      { status: "done", label: "已使用本地规则生成可用蓝图" }
+      ...retryTrace,
+      { status: "done", label: "已解析大模型返回 JSON" },
+      { status: "done", label: "已校验 Coze 标准节点、变量、分支、并行、循环和系统提示词五要素" }
     ]
   };
 }
@@ -826,7 +800,76 @@ function yamlScalar(value) {
   return JSON.stringify(text);
 }
 
-async function runWorkflowDesignerModel(config, requirement, fallbackDesign) {
+async function runWorkflowDesignerModelInStages(config, requirement, fallbackDesign) {
+  const trace = [];
+  let attempts = 0;
+  const overview = await callWorkflowDesignerStage(config, {
+    stageName: "方案概览与节点目录",
+    systemPrompt: buildWorkflowDesignerSystemPrompt(),
+    userPrompt: buildWorkflowOverviewPrompt(requirement, fallbackDesign),
+    trace,
+    validate: validateWorkflowOverviewPayload
+  });
+  attempts += overview.attempts;
+
+  const catalogNodes = extractModelNodeCatalog(overview.payload);
+  if (!catalogNodes.length) throw new Error("大模型未返回可用节点目录，无法继续生成方案。");
+
+  const detailedNodes = [];
+  for (const node of catalogNodes) {
+    const detail = await callWorkflowDesignerStage(config, {
+      stageName: `节点详情：${normalizeText(node.name) || normalizeText(node.id) || detailedNodes.length + 1}`,
+      systemPrompt: buildWorkflowDesignerSystemPrompt(),
+      userPrompt: buildWorkflowNodeDetailPrompt(requirement, overview.payload, node),
+      trace,
+      validate: validateNodeDetailPayload
+    });
+    attempts += detail.attempts;
+    detailedNodes.push(normalizeNodeDetailPayload(detail.payload, node));
+  }
+
+  return {
+    payload: {
+      title: normalizeText(overview.payload.title),
+      goal: normalizeText(overview.payload.goal) || requirement,
+      flow_type: normalizeText(overview.payload.flow_type),
+      solution: overview.payload.solution,
+      orchestration: {
+        execution_model: overview.payload.orchestration?.execution_model || overview.payload.execution_model,
+        nodes: detailedNodes,
+        edges: overview.payload.orchestration?.edges || overview.payload.edges || []
+      }
+    },
+    attempts,
+    trace
+  };
+}
+
+async function callWorkflowDesignerStage(config, { stageName, systemPrompt, userPrompt, trace, validate }) {
+  const maxAttempts = getWorkflowModelMaxAttempts();
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      trace.push({ status: "active", label: `${stageName}：第 ${attempt}/${maxAttempts} 次调用大模型` });
+      const payload = await runModelJsonRequest(config, [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ]);
+      if (validate) validate(payload);
+      trace.push({ status: "done", label: `${stageName}：大模型返回成功` });
+      return { payload, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      trace.push({ status: "warn", label: `${stageName}：第 ${attempt} 次失败：${formatModelError(error)}` });
+      if (attempt < maxAttempts) await delay(getWorkflowRetryDelayMs());
+    }
+  }
+
+  throw new Error(`${stageName} 连续 ${maxAttempts} 次大模型调用失败。最后一次错误：${formatModelError(lastError)}`);
+}
+
+async function runModelJsonRequest(config, messages) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), getWorkflowModelTimeoutMs());
   const response = await fetch(toChatUrl(config.base_url), {
@@ -839,28 +882,162 @@ async function runWorkflowDesignerModel(config, requirement, fallbackDesign) {
     body: JSON.stringify({
       model: config.model,
       temperature: Number(config.temperature ?? 0.2),
-      messages: [
-        {
-          role: "system",
-          content: buildWorkflowDesignerSystemPrompt()
-        },
-        {
-          role: "user",
-          content: buildWorkflowDesignerUserPrompt(requirement, fallbackDesign)
-        }
-      ]
+      messages
     })
   }).finally(() => clearTimeout(timeout));
 
   const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`模型接口返回 ${response.status}：${raw.slice(0, 240)}`);
-  }
-
+  if (!response.ok) throw new Error(`模型接口返回 ${response.status}：${raw.slice(0, 240)}`);
   const payload = JSON.parse(raw);
   const content = payload.choices?.[0]?.message?.content || payload.output_text || "";
   if (!content) throw new Error("模型没有返回可解析内容");
   return parseJsonObject(content);
+}
+
+function buildWorkflowOverviewPrompt(requirement, fallbackDesign) {
+  return JSON.stringify({
+    task: "第一阶段：只生成 Coze 工作流方案概览、执行模型、节点目录和边关系，不生成节点详情。",
+    requirement,
+    output_rules: [
+      "必须由大模型根据用户需求生成，不要照抄参考方案。",
+      "只返回 JSON 对象，不要 Markdown，不要代码块。",
+      "nodes 只输出节点目录，每个节点包含 id、type、coze_node_type、name、description、layout。",
+      "edges 必须完整表达串行、并行、分支、循环和汇聚关系。",
+      "solution 必须包含 target_audience、use_scenarios、stages、solution_overview、workflow_visual_description、prompt_templates、variable_table、branch_logic_matrix。"
+    ],
+    required_json_shape: {
+      title: "工作流名称",
+      goal: "业务目标",
+      flow_type: "workflow | chatflow | hybrid",
+      solution: {
+        target_audience: "string",
+        use_scenarios: ["string"],
+        stages: ["string"],
+        solution_overview: ["string"],
+        workflow_visual_description: "string",
+        prompt_templates: ["后续节点详情会展开，这里给模板目录"],
+        variable_table: ["变量目录"],
+        branch_logic_matrix: ["分支逻辑目录"]
+      },
+      orchestration: {
+        execution_model: {
+          summary: "整体执行关系",
+          has_parallel: "boolean",
+          has_branch: "boolean",
+          has_loop: "boolean",
+          parallel_notes: ["string"],
+          branch_notes: ["string"],
+          loop_notes: ["string"]
+        },
+        nodes: [
+          {
+            id: "stable_node_id",
+            type: "start | llm | knowledge | intent_recognition | selector | question | plugin | code | database | variable | loop | merge | batch | session | memory | human | card | output | planning | agent | answer | end",
+            coze_node_type: "Coze 标准节点中文名",
+            name: "标准类型：业务用途",
+            description: "节点职责",
+            layout: { lane: 0, order: 1 }
+          }
+        ],
+        edges: [
+          { from: "source_node_id", to: "target_node_id", label: "连线说明", execution: "serial | parallel | branch | loop", condition: "条件" }
+        ]
+      }
+    },
+    coze_standard_node_types: COZE_STANDARD_NODE_TYPES,
+    reference_only: {
+      title: fallbackDesign.title,
+      flow_type: fallbackDesign.flow_type,
+      node_types: fallbackDesign.orchestration.nodes.map((node) => node.coze_node_type)
+    }
+  });
+}
+
+function buildWorkflowNodeDetailPrompt(requirement, overviewPayload, nodeCatalogItem) {
+  return JSON.stringify({
+    task: "第二阶段：只为指定 Coze 节点生成完整节点详情。",
+    requirement,
+    workflow_overview: {
+      title: overviewPayload.title,
+      goal: overviewPayload.goal,
+      flow_type: overviewPayload.flow_type,
+      execution_model: overviewPayload.orchestration?.execution_model || overviewPayload.execution_model,
+      edges: overviewPayload.orchestration?.edges || overviewPayload.edges || []
+    },
+    node_catalog_item: nodeCatalogItem,
+    output_rules: [
+      "只返回当前一个节点的 JSON 对象，不要返回整个工作流。",
+      "必须补齐 input_parameters、output_parameters、parameter_sources、prompt_config、code_config、knowledge_config、node_explanation。",
+      "如果当前节点是大模型、问题、回复、意图识别、规划或多智能体，prompt_config.system_prompt 必须包含 # 角色、# 目标、# 任务、# 输出、# 限制。",
+      "代码节点必须给出完整 code_config；知识库节点必须给出完整 knowledge_config；不适用的配置可返回空字符串或 null。",
+      "只返回 JSON 对象，不要 Markdown，不要代码块。"
+    ],
+    required_json_shape: {
+      id: nodeCatalogItem.id,
+      type: nodeCatalogItem.type,
+      coze_node_type: nodeCatalogItem.coze_node_type,
+      name: nodeCatalogItem.name,
+      description: nodeCatalogItem.description,
+      input_parameters: ["完整输入参数列表"],
+      output_parameters: ["完整输出参数列表"],
+      parameter_sources: ["完整参数来源列表"],
+      prompt_config: {
+        system_prompt: "# 角色\n...\n# 目标\n...\n# 任务\n...\n# 输出\n...\n# 限制\n...",
+        user_prompt: "结合长期记忆变量和上游变量的用户提示词",
+        output_format: "输出格式",
+        model_recommendation: { model: "模型建议", temperature: 0.2, reason: "原因" }
+      },
+      code_config: "代码节点配置；不适用可为空",
+      knowledge_config: "知识库节点配置；不适用可为空",
+      node_explanation: {
+        why_needed: "为什么需要",
+        how_to_configure: "如何配置",
+        data_flow: "数据流",
+        config_steps: ["配置步骤"],
+        fallback_strategy: "兜底策略",
+        test_suggestions: ["测试建议"]
+      },
+      layout: nodeCatalogItem.layout
+    }
+  });
+}
+
+function extractModelNodeCatalog(payload) {
+  const nodes = payload?.orchestration?.nodes || payload?.nodes || payload?.node_catalog || [];
+  return Array.isArray(nodes) ? nodes : [];
+}
+
+function validateWorkflowOverviewPayload(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("模型未返回方案概览对象");
+  if (!payload.solution || typeof payload.solution !== "object") throw new Error("模型未返回 solution");
+  if (!extractModelNodeCatalog(payload).length) throw new Error("模型未返回节点目录");
+  const edges = payload.orchestration?.edges || payload.edges || [];
+  if (!Array.isArray(edges) || !edges.length) throw new Error("模型未返回边关系");
+}
+
+function validateNodeDetailPayload(payload) {
+  const node = payload?.node && typeof payload.node === "object" ? payload.node : payload;
+  if (!node || typeof node !== "object") throw new Error("模型未返回节点详情对象");
+  if (!normalizeText(node.id) && !normalizeText(node.name)) throw new Error("模型节点详情缺少 id 或 name");
+}
+
+function normalizeNodeDetailPayload(payload, catalogItem) {
+  const node = payload?.node && typeof payload.node === "object" ? payload.node : payload;
+  return {
+    ...catalogItem,
+    ...(node && typeof node === "object" ? node : {}),
+    id: normalizeText(node?.id) || normalizeText(catalogItem.id),
+    type: normalizeText(node?.type) || normalizeText(catalogItem.type),
+    coze_node_type: normalizeText(node?.coze_node_type) || normalizeText(catalogItem.coze_node_type),
+    name: normalizeText(node?.name) || normalizeText(catalogItem.name),
+    description: normalizeText(node?.description) || normalizeText(catalogItem.description),
+    layout: node?.layout || catalogItem.layout
+  };
+}
+
+function formatModelError(error) {
+  if (error?.name === "AbortError") return `大模型生成超过 ${Math.round(getWorkflowModelTimeoutMs() / 1000)} 秒`;
+  return error?.message || "大模型调用失败";
 }
 
 async function runRequirementClarifierModel(config, payload) {
@@ -1370,7 +1547,19 @@ function withTimeout(promise, timeoutMs, message) {
 }
 
 function getWorkflowModelTimeoutMs() {
-  return Number(process.env.MODEL_TIMEOUT_MS || 45000);
+  return Number(process.env.MODEL_TIMEOUT_MS || 120000);
+}
+
+function getWorkflowModelMaxAttempts() {
+  return Math.max(1, Number(process.env.MODEL_MAX_ATTEMPTS || 3));
+}
+
+function getWorkflowRetryDelayMs() {
+  return Math.max(0, Number(process.env.MODEL_RETRY_DELAY_MS || 1500));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function getModelConfig() {

@@ -157,9 +157,9 @@ function startGenerationProgress() {
   const startedAt = Date.now();
   const steps = [
     ["done", "读取需求并准备 Coze 编排提示词"],
-    ["active", "调用已配置的大模型生成方案与节点编排"],
-    ["pending", "等待模型返回严格 JSON"],
-    ["pending", "校验 Coze 标准节点类型、变量和连线关系"],
+    ["active", "调用大模型生成方案概览、节点目录和边关系"],
+    ["pending", "按节点目录循环调用大模型生成节点详情"],
+    ["pending", "校验 Coze 标准节点、变量、连线和系统提示词五要素"],
     ["pending", "渲染流程图、节点详情和提示词"]
   ];
   els.generationProgress.hidden = false;
@@ -167,7 +167,7 @@ function startGenerationProgress() {
   clearInterval(state.progressTimer);
   state.progressTimer = setInterval(() => {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
-    renderProgressSteps("生成进度", steps, `大模型仍在生成中，已等待 ${elapsed} 秒。`);
+    renderProgressSteps("生成进度", steps, `大模型正在分阶段生成中，已等待 ${elapsed} 秒。`);
   }, 5000);
 }
 
@@ -177,13 +177,14 @@ function finishGenerationProgress(design) {
     ? design.generation_trace
     : [
         { status: "done", label: "需求解析完成" },
-        { status: design.generation_source === "configured_model" ? "done" : "warn", label: design.generation_source === "configured_model" ? "大模型已返回工作流 JSON" : "大模型不可用，已使用本地兜底" },
+        { status: "done", label: "大模型已返回工作流 JSON" },
         { status: "done", label: "节点、变量、分支和循环关系已校验" },
         { status: "done", label: "页面渲染完成" }
       ];
   const subtitle = [
-    design.generation_source === "configured_model" ? "生成来源：已配置大模型" : "生成来源：本地兜底",
+    "生成来源：已配置大模型",
     design.model_elapsed_ms ? `模型耗时：${Math.round(design.model_elapsed_ms / 1000)} 秒` : "",
+    design.model_attempts ? `模型调用次数：${design.model_attempts}` : "",
     design.generation_warning || ""
   ].filter(Boolean).join("；");
   renderProgressSteps("生成完成", trace.map((item) => [item.status || "done", item.label || item.message || item]), subtitle);
