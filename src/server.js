@@ -1036,7 +1036,7 @@ function normalizeNodeDetailPayload(payload, catalogItem) {
 }
 
 function formatModelError(error) {
-  if (error?.name === "AbortError") return `大模型生成超过 ${Math.round(getWorkflowModelTimeoutMs() / 1000)} 秒`;
+  if (error?.name === "AbortError") return `大模型生成超过 ${Math.ceil(getWorkflowModelTimeoutMs() / 1000)} 秒`;
   return error?.message || "大模型调用失败";
 }
 
@@ -1547,7 +1547,8 @@ function withTimeout(promise, timeoutMs, message) {
 }
 
 function getWorkflowModelTimeoutMs() {
-  return Number(process.env.MODEL_TIMEOUT_MS || 120000);
+  const configured = Number(process.env.MODEL_TIMEOUT_MS || 120000);
+  return Number.isFinite(configured) ? Math.max(30000, configured) : 120000;
 }
 
 function getWorkflowModelMaxAttempts() {
