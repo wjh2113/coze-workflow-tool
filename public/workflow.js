@@ -258,10 +258,10 @@ async function renderDiagram(design) {
 function renderCozeDiagram(design) {
   const nodes = design.orchestration.nodes;
   const edges = design.orchestration.edges || [];
-  const nodeWidth = 280;
-  const nodeHeight = 88;
+  const nodeWidth = 340;
+  const nodeHeight = 104;
   const laneGap = 96;
-  const rowGap = nodes.length > 8 ? 34 : 48;
+  const rowGap = nodes.length > 8 ? 42 : 56;
   const positions = resolveNodePositions(nodes, edges, nodeWidth, nodeHeight, laneGap, rowGap);
   const width = positions.width;
   const height = positions.height;
@@ -279,11 +279,11 @@ function renderCozeDiagram(design) {
     const y = position?.y || startY;
     parts.push(`<g data-node-id="${escapeAttr(node.id)}" class="coze-flow-node" transform="translate(${x},${y})">`);
     parts.push(`<rect class="coze-node-card" width="${nodeWidth}" height="${nodeHeight}" rx="12" />`);
-    parts.push(`<rect class="coze-node-icon" x="16" y="22" width="44" height="44" rx="10" />`);
-    parts.push(`<text class="coze-node-icon-text" x="38" y="50" text-anchor="middle">${escapeSvg(nodeIcon(node.type))}</text>`);
-    parts.push(`<text class="coze-node-title" x="74" y="38">${escapeSvg(node.name)}</text>`);
-    parts.push(`<text class="coze-node-type" x="74" y="64">${escapeSvg(node.coze_node_type)} · ${escapeSvg(node.execution_type)}</text>`);
-    parts.push(`<circle class="coze-node-dot" cx="${nodeWidth - 18}" cy="44" r="4" />`);
+    parts.push(`<rect class="coze-node-icon" x="18" y="26" width="52" height="52" rx="12" />`);
+    parts.push(`<text class="coze-node-icon-text" x="44" y="59" text-anchor="middle">${escapeSvg(nodeIcon(node.type))}</text>`);
+    parts.push(`<text class="coze-node-title" x="86" y="45">${escapeSvg(node.name)}</text>`);
+    parts.push(`<text class="coze-node-type" x="86" y="74">${escapeSvg(node.coze_node_type)} · ${escapeSvg(node.execution_type)}</text>`);
+    parts.push(`<circle class="coze-node-dot" cx="${nodeWidth - 22}" cy="52" r="5" />`);
     parts.push("</g>");
   });
   parts.push("</svg>");
