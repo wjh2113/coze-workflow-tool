@@ -815,18 +815,18 @@ async function runWorkflowDesignerModelInStages(config, requirement, fallbackDes
   const catalogNodes = extractModelNodeCatalog(overview.payload);
   if (!catalogNodes.length) throw new Error("大模型未返回可用节点目录，无法继续生成方案。");
 
-  const detailedNodes = [];
-  for (const node of catalogNodes) {
+  const detailResults = await mapWithConcurrency(catalogNodes, getWorkflowNodeConcurrency(), async (node, index) => {
     const detail = await callWorkflowDesignerStage(config, {
-      stageName: `节点详情：${normalizeText(node.name) || normalizeText(node.id) || detailedNodes.length + 1}`,
+      stageName: `节点详情：${normalizeText(node.name) || normalizeText(node.id) || index + 1}`,
       systemPrompt: buildWorkflowDesignerSystemPrompt(),
       userPrompt: buildWorkflowNodeDetailPrompt(requirement, overview.payload, node),
       trace,
       validate: validateNodeDetailPayload
     });
-    attempts += detail.attempts;
-    detailedNodes.push(normalizeNodeDetailPayload(detail.payload, node));
-  }
+    return { attempts: detail.attempts, node: normalizeNodeDetailPayload(detail.payload, node) };
+  });
+  attempts += detailResults.reduce((sum, item) => sum + item.attempts, 0);
+  const detailedNodes = detailResults.map((item) => item.node);
 
   return {
     payload: {
@@ -1038,6 +1038,22 @@ function normalizeNodeDetailPayload(payload, catalogItem) {
 function formatModelError(error) {
   if (error?.name === "AbortError") return `大模型生成超过 ${Math.ceil(getWorkflowModelTimeoutMs() / 1000)} 秒`;
   return error?.message || "大模型调用失败";
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length || 1);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }));
+
+  return results;
 }
 
 async function runRequirementClarifierModel(config, payload) {
@@ -1557,6 +1573,10 @@ function getWorkflowModelMaxAttempts() {
 
 function getWorkflowRetryDelayMs() {
   return Math.max(0, Number(process.env.MODEL_RETRY_DELAY_MS || 1500));
+}
+
+function getWorkflowNodeConcurrency() {
+  return Math.max(1, Number(process.env.MODEL_NODE_CONCURRENCY || 3));
 }
 
 function delay(ms) {
