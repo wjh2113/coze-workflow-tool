@@ -259,7 +259,7 @@ function renderCozeDiagram(design) {
   const nodes = design.orchestration.nodes;
   const edges = design.orchestration.edges || [];
   const nodeWidth = 280;
-  const nodeHeight = 76;
+  const nodeHeight = 88;
   const laneGap = 96;
   const rowGap = nodes.length > 8 ? 34 : 48;
   const positions = resolveNodePositions(nodes, edges, nodeWidth, nodeHeight, laneGap, rowGap);
@@ -279,11 +279,11 @@ function renderCozeDiagram(design) {
     const y = position?.y || startY;
     parts.push(`<g data-node-id="${escapeAttr(node.id)}" class="coze-flow-node" transform="translate(${x},${y})">`);
     parts.push(`<rect class="coze-node-card" width="${nodeWidth}" height="${nodeHeight}" rx="12" />`);
-    parts.push(`<rect class="coze-node-icon" x="16" y="18" width="40" height="40" rx="10" />`);
-    parts.push(`<text class="coze-node-icon-text" x="36" y="43" text-anchor="middle">${escapeSvg(nodeIcon(node.type))}</text>`);
-    parts.push(`<text class="coze-node-title" x="70" y="32">${escapeSvg(node.name)}</text>`);
-    parts.push(`<text class="coze-node-type" x="70" y="55">${escapeSvg(node.coze_node_type)} · ${escapeSvg(node.execution_type)}</text>`);
-    parts.push(`<circle class="coze-node-dot" cx="${nodeWidth - 18}" cy="38" r="4" />`);
+    parts.push(`<rect class="coze-node-icon" x="16" y="22" width="44" height="44" rx="10" />`);
+    parts.push(`<text class="coze-node-icon-text" x="38" y="50" text-anchor="middle">${escapeSvg(nodeIcon(node.type))}</text>`);
+    parts.push(`<text class="coze-node-title" x="74" y="38">${escapeSvg(node.name)}</text>`);
+    parts.push(`<text class="coze-node-type" x="74" y="64">${escapeSvg(node.coze_node_type)} · ${escapeSvg(node.execution_type)}</text>`);
+    parts.push(`<circle class="coze-node-dot" cx="${nodeWidth - 18}" cy="44" r="4" />`);
     parts.push("</g>");
   });
   parts.push("</svg>");

@@ -648,7 +648,7 @@ pre {
 
 .coze-edge-label {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .coze-port {
@@ -674,19 +674,19 @@ pre {
 
 .coze-node-icon-text {
   fill: var(--accent);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .coze-node-title {
   fill: var(--text);
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
 }
 
 .coze-node-type {
   fill: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .coze-node-dot {
