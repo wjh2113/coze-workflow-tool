@@ -523,14 +523,14 @@ pre {
 }
 
 .diagram-wrap {
-  min-height: 380px;
+  min-height: 560px;
+  max-height: 72vh;
   overflow: auto;
-  padding: 30px;
+  padding: 22px;
   background: #f7fbff;
 }
 
 .diagram-wrap svg {
-  max-width: 100%;
   height: auto;
 }
 
@@ -617,10 +617,10 @@ pre {
 
 .coze-flow-svg {
   display: block;
-  width: min(100%, 560px);
-  min-width: 460px;
+  width: max-content;
+  min-width: 100%;
   height: auto;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .coze-flow-svg text,

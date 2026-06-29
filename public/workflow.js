@@ -261,7 +261,7 @@ function renderCozeDiagram(design) {
   const nodeWidth = 280;
   const nodeHeight = 76;
   const laneGap = 96;
-  const rowGap = 56;
+  const rowGap = nodes.length > 8 ? 34 : 48;
   const positions = resolveNodePositions(nodes, edges, nodeWidth, nodeHeight, laneGap, rowGap);
   const width = positions.width;
   const height = positions.height;
@@ -327,7 +327,7 @@ function resolveNodePositions(nodes, edges, nodeWidth, nodeHeight, laneGap, rowG
     return {
       id: node.id,
       lane: Number.isFinite(Number(layout.lane)) ? Number(layout.lane) : 0,
-      order: Number.isFinite(Number(layout.order)) ? Number(layout.order) : index + 1
+      order: index + 1
     };
   });
   outgoingGroups.forEach((group, from) => {
